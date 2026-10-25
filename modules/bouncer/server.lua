@@ -94,6 +94,8 @@ RegisterNetEvent("pickle_clubs:startEscort", function(targetSource, bouncerSourc
     if not targetSource or not bouncerSource then return end
     if bouncerSource ~= src then return end
     if not BouncerIsInZone(bouncerSource) then return end
+    if not ClubNearby(src,targetSource,3) or ClubEscorts[targetSource] then return end
+    ClubEscorts[targetSource]=src
     ShowNotification(targetSource, "You are being escorted by a bouncer")
     TriggerClientEvent("pickle_clubs:escortAttach", targetSource, bouncerSource)
 end)
@@ -103,13 +105,18 @@ RegisterNetEvent("pickle_clubs:flingEscort", function(targetSource, forwardX, fo
     if not (Config.Bouncer and Config.Bouncer.enableEscorting) then return end
     targetSource = tonumber(targetSource)
     if not targetSource then return end
-    TriggerClientEvent("pickle_clubs:escortFling", targetSource, forwardX, forwardY)
+    if ClubEscorts[targetSource]~=source or not ClubNearby(source,targetSource,5) then return end
+    local forward=GetEntityForwardVector(GetPlayerPed(source))
+    ClubEscorts[targetSource]=nil
+    TriggerClientEvent("pickle_clubs:escortFling", targetSource, forward.x, forward.y)
 end)
 
 -- Escort: release victim
 RegisterNetEvent("pickle_clubs:stopEscort", function(targetSource)
     targetSource = tonumber(targetSource)
     if not targetSource then return end
+    if ClubEscorts[targetSource]~=source then return end
+    ClubEscorts[targetSource]=nil
     TriggerClientEvent("pickle_clubs:escortDetach", targetSource)
 end)
 
@@ -117,8 +124,9 @@ end)
 RegisterNetEvent("pickle_clubs:revokeAllPasses", function(targetSource)
     targetSource = tonumber(targetSource)
     if not targetSource then return end
+    if not BouncerIsInZone(source) or not ClubNearby(source,targetSource,5) then return end
     for clubId, passes in pairs(ClubPasses or {}) do
-        if passes[targetSource] then
+        if ClubStaff(source,clubId) and passes[targetSource] then
             SetClubPass(targetSource, clubId, false)
         end
     end
@@ -128,6 +136,7 @@ end)
 lib.callback.register("pickle_clubs:getPlayerInventory", function(source, targetSource)
     targetSource = tonumber(targetSource)
     if not targetSource or not Inventory or not Inventory.GetInventory then return {}, "Unknown" end
+    if not BouncerIsInZone(source) or not ClubNearby(source,targetSource,3) then return {},"No access" end
     local items = Inventory.GetInventory(targetSource)
     for i = 1, #items do
         local item = items[i]

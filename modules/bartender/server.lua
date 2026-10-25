@@ -123,7 +123,7 @@ local function PaySocietyCut(stationId, totalAmount)
     if not societyName or not AddSocietyMoney then return totalAmount end
     local societyAmount = math.floor(totalAmount * societyCut)
     if societyAmount > 0 then
-        AddSocietyMoney(societyName, societyAmount)
+        if AddSocietyMoney(societyName,societyAmount)~=true then return totalAmount end
     end
     return totalAmount - societyAmount
 end
@@ -165,7 +165,9 @@ local function EnsureStationData(stationId)
             for i = 1, #sd.orderQueue do
                 local order = sd.orderQueue[i]
                 -- Only count down the front order, and skip player orders (no time limit)
-                if i == 1 and not order.isPlayerOrder then
+                if order.isPlayerOrder and (os.time()>order.expiresAt or order.playerIdentity~=GetIdentifier(order.playerSource)) then
+                    table.insert(expiredOrders,order.id)
+                elseif i == 1 and not order.isPlayerOrder then
                     order.timer = order.timer - 1
                     if order.timer <= 0 then
                         table.insert(expiredOrders, order.id)
@@ -181,6 +183,8 @@ local function EnsureStationData(stationId)
 end
 
 local function SetStationController(stationId, source, controlType)
+    if not ClubStation(source,stationId) or not ClubStaff(source,GetClubIdFromStationId(stationId))
+        or (controlType~='interaction' and controlType~='service') then return false,'No access' end
     if not GetStation(stationId) then return false, "Station not found" end
     if IsStationControlled(stationId, controlType) then
         return false, "Station is already controlled"
@@ -188,6 +192,8 @@ local function SetStationController(stationId, source, controlType)
     if not StationControllers[stationId] then StationControllers[stationId] = {} end
     StationControllers[stationId][controlType] = {
         source = source,
+        identity=GetIdentifier(source),
+        craftReady=GetGameTimer()+5000,
         type = controlType,
     }
     if controlType == "interaction" then
@@ -452,6 +458,8 @@ function StartBartenderService(stationId, coords, heading)
     local stationData = StationData[stationId]
     if not stationData then return false end
 
+    stationData.serviceGeneration=(stationData.serviceGeneration or 0)+1
+    local generation=stationData.serviceGeneration
     stationData.serviceActive = true
     if type(coords) == "table" then
         coords = vector3(coords.x, coords.y, coords.z)
@@ -474,9 +482,9 @@ function StartBartenderService(stationId, coords, heading)
 
     -- Start spawn thread
     StationData[stationId].spawnThread = CreateThread(function()
-        while StationData[stationId] and StationData[stationId].serviceActive do
+        while StationData[stationId]==stationData and stationData.serviceActive and stationData.serviceGeneration==generation do
             Wait(Config.Bartender.orderSpawnInterval * 1000)
-            if StationData[stationId] and StationData[stationId].serviceActive then
+            if StationData[stationId]==stationData and stationData.serviceActive and stationData.serviceGeneration==generation then
                 SpawnNextOrder(stationId)
             end
         end
@@ -496,6 +504,7 @@ function StopBartenderService(stationId)
     end
     
     stationData.serviceActive = false
+    stationData.serviceGeneration=(stationData.serviceGeneration or 0)+1
 
     -- Cleanup all orders, refund player orders
     for i = 1, #stationData.orderQueue do
@@ -505,10 +514,10 @@ function StopBartenderService(stationId)
             -- Refund the player
             local price = order.price or 0
             if price > 0 and GetPlayerPing(order.playerSource) > 0 then
-                AddMoney(order.playerSource, price, "money")
+                if order.paid then AddMoney(order.playerSource, price, "money") end
             end
             if GetPlayerPing(order.playerSource) > 0 then
-                ShowNotification(order.playerSource, "Your order has been cancelled and refunded")
+                ShowNotification(order.playerSource, "Your order has been cancelled")
             end
         end
     end
@@ -547,6 +556,7 @@ RegisterNetEvent("pickle_clubs:startBartenderService", function(stationId, coord
 end)
 
 RegisterNetEvent("pickle_clubs:stopBartenderService", function(stationId)
+    if not ClubStation(source,stationId,"service") then return end
     local source = source
     
     if StopBartenderService(stationId) then
@@ -628,6 +638,7 @@ end
 local RegisteredDrinkItems = {}
 
 local function RegisterDrinkItemIfNeeded(itemName)
+    if not ClubAllowedDrink(itemName) then return end
     if not itemName or itemName == "" then return end
     if RegisteredDrinkItems[itemName] then return end
     RegisterUsableItem(itemName, function(source, item)
@@ -660,7 +671,9 @@ end
 
 RegisterNetEvent("pickle_clubs:submitDrink", function(stationId, orderId, flavorWeights)
     local source = source
-    
+    if not ClubStation(source,stationId,'interaction') or not ClubWeights(flavorWeights) then return end
+    local controller=StationControllers[stationId].interaction
+    if GetGameTimer()<controller.craftReady then return end
     local stationData = StationData[stationId]
     if not stationData then
         TriggerClientEvent("pickle_clubs:drinkSubmissionResult", source, false, "Station not found")
@@ -674,13 +687,16 @@ RegisterNetEvent("pickle_clubs:submitDrink", function(stationId, orderId, flavor
     end
     
     local order = stationData.orderQueue[1]
+    if order.busy then return end
     local isValid, message = ValidateDrink(stationId, orderId, flavorWeights)
     
     if isValid then
+        order.busy=true
+        controller.craftReady=GetGameTimer()+5000
         if order.isPlayerOrder and order.playerSource then
             -- Player order: give drink item to ordering player
             local targetSource = order.playerSource
-            if GetPlayerPing(targetSource) > 0 then
+            if GetPlayerPing(targetSource) > 0 and order.playerIdentity==GetIdentifier(targetSource) then
                 local itemName = order.item
                 if itemName and itemName ~= "" then
                     local flavorsConfig = Config.Bartender.flavors
@@ -709,10 +725,17 @@ RegisterNetEvent("pickle_clubs:submitDrink", function(stationId, orderId, flavor
                     local metadata = { flavors = order.flavors, alcoholPct = alcoholPct, description = description }
                     RegisterDrinkItemIfNeeded(itemName)
                     if not Inventory.CanCarryItem or Inventory.CanCarryItem(targetSource, itemName, 1) then
-                        Inventory.AddItem(targetSource, itemName, 1, metadata)
+                        if order.price>0 and RemoveMoney(targetSource,order.price,'money')~=true then order.busy=nil; return end
+                        if Inventory.AddItem(targetSource,itemName,1,metadata)~=true then
+                            if order.price>0 then AddMoney(targetSource,order.price,'money') end
+                            order.busy=nil; return
+                        end
+                        PaySocietyCut(stationId,order.price)
                         ShowNotification(targetSource, "Your drink is ready!")
                     else
+                        order.busy=nil
                         ShowNotification(targetSource, "Your drink is ready but you cannot carry it")
+                        return
                     end
                 end
             end
@@ -737,10 +760,7 @@ RegisterNetEvent("pickle_clubs:submitDrink", function(stationId, orderId, flavor
 end)
 
 RegisterNetEvent("pickle_clubs:orderCompleted", function(stationId, orderId)
-    -- Legacy event, now handled by submitDrink
-    if StationData[stationId] then
-        ExpireOrder(stationId, orderId)
-    end
+    -- Legacy client completion cannot mutate server order ownership.
 end)
 
 -- Build list of drinks for Place Order UI: { drinkKey, name, price, flavors, alcoholPct, item }
@@ -807,18 +827,9 @@ RegisterNetEvent("pickle_clubs:placePlayerOrder", function(stationId, drinkKey)
     local price = menuEntry.price
     local alcoholPct = menuEntry.alcohol
     local itemName = menuEntry.item
+    if not ClubAllowedDrink(itemName) then return end
 
-    -- Charge the player and give society its cut
-    if price and price > 0 then
-        local cash = (GetMoney and GetMoney(source, "money")) or 0
-        if cash < price then
-            ShowNotification(source, "Not enough cash")
-            return
-        end
-        RemoveMoney(source, price, "money")
-        PaySocietyCut(stationId, price)
-    end
-
+    if not ClubStation(source,stationId) or not ClubFinite(price,0,100000) or price%1~=0 then return end
     -- If a bartender is active, queue the order for them to make
     if IsStationControlled(stationId, "interaction") then
         local stationData = StationData[stationId]
@@ -845,6 +856,8 @@ RegisterNetEvent("pickle_clubs:placePlayerOrder", function(stationId, drinkKey)
             stationId = stationId,
             isPlayerOrder = true,
             playerSource = source,
+            playerIdentity=GetIdentifier(source),
+            expiresAt=os.time()+300,
             price = price or 0,
         }
         table.insert(stationData.orderQueue, order)
@@ -878,19 +891,24 @@ RegisterNetEvent("pickle_clubs:placePlayerOrder", function(stationId, drinkKey)
             local metadata = { flavors = requiredFlavorKeys, alcoholPct = alcoholPct or 0, description = description }
             RegisterDrinkItemIfNeeded(itemName)
             if not Inventory.CanCarryItem or Inventory.CanCarryItem(source, itemName, 1) then
-                Inventory.AddItem(source, itemName, 1, metadata)
+                if price>0 and RemoveMoney(source,price,'money')~=true then return end
+                if Inventory.AddItem(source,itemName,1,metadata)~=true then
+                    if price>0 then AddMoney(source,price,'money') end
+                    ShowNotification(source,'Drink delivery failed'); return
+                end
+                PaySocietyCut(stationId,price)
                 ShowNotification(source, "Here's your " .. drinkName)
             else
                 ShowNotification(source, "You cannot carry this item")
                 -- Refund
                 if price and price > 0 then
-                    AddMoney(source, price, "money")
+                    -- Payment is taken only at delivery.
                 end
             end
         else
             ShowNotification(source, "Drink has no associated item")
             if price and price > 0 then
-                AddMoney(source, price, "money")
+                -- Payment is taken only at delivery.
             end
         end
     end
@@ -956,7 +974,10 @@ end
 
 RegisterNetEvent("pickle_clubs:giveDrinkItem", function(stationId, flavorWeights)
     local source = source
-    if not stationId or not flavorWeights then return end
+    if not ClubStation(source,stationId,'interaction') or not ClubWeights(flavorWeights) then return end
+    local controller=StationControllers[stationId].interaction
+    if GetGameTimer()<controller.craftReady then return end
+    controller.craftReady=GetGameTimer()+5000
 
     local entry = MatchDrinkToMenu(stationId, flavorWeights)
     if not entry then
@@ -965,6 +986,7 @@ RegisterNetEvent("pickle_clubs:giveDrinkItem", function(stationId, flavorWeights
     end
 
     local itemName = entry.item
+    if not ClubAllowedDrink(itemName) then return end
     if Inventory.CanCarryItem and not Inventory.CanCarryItem(source, itemName, 1) then
         ShowNotification(source, "You cannot carry this item")
         return
@@ -996,7 +1018,7 @@ RegisterNetEvent("pickle_clubs:giveDrinkItem", function(stationId, flavorWeights
 
     local metadata = { flavors = GetValidFlavors(entry), alcoholPct = alcoholPct, description = description }
     RegisterDrinkItemIfNeeded(itemName)
-    Inventory.AddItem(source, itemName, 1, metadata)
+    if Inventory.AddItem(source,itemName,1,metadata)~=true then return end
     ShowNotification(source, "You received a " .. (entry.name or itemName))
 end)
 
@@ -1038,7 +1060,8 @@ RegisterNetEvent("pickle_clubs:setStationController", function(stationId, contro
 end)
 
 RegisterNetEvent("pickle_clubs:clearStationController", function(stationId, controlType)
-    -- Cancel and refund player orders when the bartender leaves
+    if not ClubStation(source,stationId,controlType) then return end
+    -- Cancel unpaid player orders when the bartender leaves
     if controlType == "interaction" then
         local stationData = StationData[stationId]
         if stationData and stationData.orderQueue then
@@ -1048,10 +1071,10 @@ RegisterNetEvent("pickle_clubs:clearStationController", function(stationId, cont
                 if order.isPlayerOrder and order.playerSource then
                     local price = order.price or 0
                     if price > 0 and GetPlayerPing(order.playerSource) > 0 then
-                        AddMoney(order.playerSource, price, "money")
+                        if order.paid then AddMoney(order.playerSource, price, "money") end
                     end
                     if GetPlayerPing(order.playerSource) > 0 then
-                        ShowNotification(order.playerSource, "Your order has been cancelled and refunded")
+                        ShowNotification(order.playerSource, "Your order has been cancelled")
                     end
                     table.insert(refunded, i)
                 end
@@ -1113,7 +1136,8 @@ end)
 
 -- Register club drink items as usable after clubs load
 CreateThread(function()
-    Wait(3000) -- Wait for clubs to load from SQL
+    while not ClubsLoaded do Wait(100) end
+    while true do
     local seen = {}
     for _, club in pairs(Clubs or {}) do
         for _, entry in pairs(club.drink_menu or {}) do
@@ -1123,12 +1147,16 @@ CreateThread(function()
             end
         end
     end
+    Wait(5000)
+    end
 end)
 
 -- Sync equipped drink to nearby players
 RegisterNetEvent("pickle_clubs:syncEquippedDrink", function(coords, flavorWeights, color, progress)
     local source = source
-    
+    if not ClubWeights(flavorWeights) or type(color)~='table' or not ClubFinite(progress,0,1) then return end
+    for _,k in ipairs({1,2,3}) do if not ClubFinite(color[k],0,255) then return end end
+    coords=GetEntityCoords(GetPlayerPed(source))
     -- Update server-side tracking
     EquippedDrinksServer[source] = {
         coords = coords,

@@ -50,7 +50,11 @@ lib.callback.register("pickle_clubs:setEmployeeGrade", function(source, clubId, 
     if not jobName or not SetPlayerJob then return false, "No job configured" end
     targetSource = tonumber(targetSource)
     grade = tonumber(grade)
-    if not targetSource or not grade then return false, "Invalid parameters" end
+    if not targetSource or not ClubFinite(grade,0,100) or grade%1~=0 then return false,'Invalid parameters' end
+    if GetPlayerJobName(targetSource)~=jobName then return false,'Not an employee' end
+    local valid=false
+    for _,g in pairs(GetJobGrades(jobName) or {}) do if tonumber(g.grade or g.level)==grade then valid=true end end
+    if not valid or (IsPlayerJobBoss and IsPlayerJobBoss(targetSource,jobName)) then return false,'Invalid rank' end
     if targetSource == source then return false, "You can't change your own rank" end
     SetPlayerJob(targetSource, jobName, grade)
     return true
@@ -63,6 +67,8 @@ lib.callback.register("pickle_clubs:fireEmployee", function(source, clubId, targ
     targetSource = tonumber(targetSource)
     if not targetSource then return false, "Invalid target" end
     if targetSource == source then return false, "You can't fire yourself" end
+    local jobName=GetPrimaryJobName(Clubs[clubId])
+    if GetPlayerJobName(targetSource)~=jobName or (IsPlayerJobBoss and IsPlayerJobBoss(targetSource,jobName)) then return false,'Not an eligible employee' end
     SetPlayerJob(targetSource, "unemployed", 0)
     ShowNotification(targetSource, "You have been fired")
     return true
@@ -76,6 +82,7 @@ lib.callback.register("pickle_clubs:hirePlayer", function(source, clubId, target
     if not jobName or not SetPlayerJob then return false, "No job configured" end
     targetSource = tonumber(targetSource)
     if not targetSource then return false, "Invalid target" end
+    if not ClubNearby(source,targetSource,5) then return false,"Player must be nearby" end
     SetPlayerJob(targetSource, jobName, 0)
     local name = GetPlayerCharacterName and GetPlayerCharacterName(targetSource) or ("Player " .. targetSource)
     ShowNotification(targetSource, "You have been hired!")

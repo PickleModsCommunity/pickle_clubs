@@ -654,9 +654,10 @@ export function ClubManagement() {
     if (debouncedEntitySaveRef.current != null) {
       window.clearTimeout(debouncedEntitySaveRef.current);
     }
+    const draft = structuredClone(entityDraftRef.current);
     debouncedEntitySaveRef.current = window.setTimeout(() => {
       debouncedEntitySaveRef.current = null;
-      const draft = entityDraftRef.current;
+
       const payload = buildEntityPayloadFromDraft(draft, true);
       if (payload) {
         sendClubAction("updateClubEntity", {
@@ -673,9 +674,10 @@ export function ClubManagement() {
     if (debouncedClubSaveRef.current != null) {
       window.clearTimeout(debouncedClubSaveRef.current);
     }
+    const draft = structuredClone(clubDraftRef.current);
     debouncedClubSaveRef.current = window.setTimeout(() => {
       debouncedClubSaveRef.current = null;
-      const draft = clubDraftRef.current;
+
       if (!draft.label.trim()) return;
       sendClubAction("updateClub", {
         clubId: selectedClubId,

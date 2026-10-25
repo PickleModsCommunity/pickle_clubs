@@ -87,7 +87,9 @@ end
 
 function AddMoney(source, count, currency)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer then return false end
     local currency = currency or "money"
+    local before=GetMoney(source,currency)
     if (currency == "money") then
         xPlayer.Functions.AddMoney('cash', count)
     elseif (currency == "dirty") then
@@ -95,11 +97,14 @@ function AddMoney(source, count, currency)
         Inventory.AddItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
     end
     TriggerClientEvent("pickle_clubs:updateMoney", source, money)
+    return GetMoney(source,currency)==before + count
 end
 
 function RemoveMoney(source, count, currency)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer then return false end
     local currency = currency or "money"
+    local before=GetMoney(source,currency)
     if (currency == "money") then
         xPlayer.Functions.RemoveMoney('cash', count)
     elseif (currency == "dirty") then
@@ -107,6 +112,7 @@ function RemoveMoney(source, count, currency)
         Inventory.RemoveItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
     end
     TriggerClientEvent("pickle_clubs:updateMoney", source, money)
+    return GetMoney(source,currency)==before - count
 end
 
 function GetMoney(source, currency)
@@ -225,13 +231,31 @@ local function SocietyCall(action, name, amount, cb)
     }
     for _, fn in ipairs(exportFns[action]) do
         local ok, res = pcall(function() return exports[sys][fn](exports[sys], name, amount) end)
-        if ok then if cb then cb(res or 0) end; return true end
+        if ok then
+            if action=='get' then
+                local balance=type(res)=='table' and (res.balance or res.money) or res
+                if cb then cb(type(balance)=='number' and balance or false) end
+                return type(balance)=='number'
+            end
+            local confirmed=res~=nil and res~=false
+            if cb then cb(confirmed) end
+            return confirmed
+        end
     end
     for _, fn in ipairs(exportFns[action]) do
         local ok, res = pcall(function() return exports[altExport][fn](exports[altExport], name, amount) end)
-        if ok then if cb then cb(res or 0) end; return true end
+        if ok then
+            if action=='get' then
+                local balance=type(res)=='table' and (res.balance or res.money) or res
+                if cb then cb(type(balance)=='number' and balance or false) end
+                return type(balance)=='number'
+            end
+            local confirmed=res~=nil and res~=false
+            if cb then cb(confirmed) end
+            return confirmed
+        end
     end
-    if eventNames[action] then
+    if action=="get" and eventNames[action] then
         local ok = pcall(TriggerEvent, eventNames[action], name, amount)
         if ok then if cb then cb(0) end; return true end
     end
@@ -239,11 +263,11 @@ local function SocietyCall(action, name, amount, cb)
         _warnedSociety = true
         print(("[pickle_clubs] WARNING: no working society API found for '%s' (tried exports on %s/%s and event fallback)"):format(action, sys, altExport))
     end
-    if cb then cb(0) end
+    if cb then cb(false) end
     return false
 end
 
-function AddSocietyMoney(name, amount)         SocietyCall("add", name, amount) end
+function AddSocietyMoney(name, amount) return SocietyCall("add", name, amount) end
 function RemoveSocietyMoney(name, amount, cb)  SocietyCall("remove", name, amount, cb) end
 function GetSocietyBalance(name, cb)           if type(cb) == "function" then SocietyCall("get", name, 0, cb) end end
 
@@ -292,14 +316,16 @@ CreateThread(function()
 
     Inventory.AddItem = function(source, name, count, metadata) -- Metadata is not required.
         local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-        xPlayer.Functions.AddItem(name, count, nil, metadata)
+        local ok=xPlayer and xPlayer.Functions.AddItem(name, count, nil, metadata)
         Inventory.UpdateInventory(source)
+        return ok==true
     end
 
     Inventory.RemoveItem = function(source, name, count)
         local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-        xPlayer.Functions.RemoveItem(name, count)
+        local ok=xPlayer and xPlayer.Functions.RemoveItem(name, count)
         Inventory.UpdateInventory(source)
+        return ok==true
     end
 
     Inventory.AddWeapon = function(source, name, count, metadata) -- Metadata is not required.
