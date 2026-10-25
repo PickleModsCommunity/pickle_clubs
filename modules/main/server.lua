@@ -347,6 +347,7 @@ local function CountPrimaryJobs(jobs)
 end
 
 function UpdateClub(id, data, cb)
+    if data.drink_menu~=nil and not ClubValidMenu(data.drink_menu) then if cb then cb(false,'Invalid drink menu') end; return end
     local club = Clubs[id]
     if not club then
         if cb then cb(false, "Club not found") end
@@ -412,6 +413,7 @@ function DeleteClub(id, cb)
     Clubs[id] = nil
     EntityPlayers[id] = nil
     SyncAllClubs(-1)
+    MySQL.Sync.execute("DELETE FROM pickle_club_entities WHERE club_id = @id", {["@id"]=id})
     MySQL.Async.execute("DELETE FROM pickle_clubs WHERE id = @id", {
         ["@id"] = id,
     }, function(affectedRows)
@@ -567,6 +569,7 @@ function LoadAllClubs()
             for id, clubData in pairs(loaded) do
                 RegisterClub(clubData, true)
             end
+            ClubsLoaded=true
             SyncAllClubs(-1)
             print(("^2[pickle_clubs]^0 Loaded %s clubs from SQL."):format(#(clubRows or {})))
         end)
@@ -737,55 +740,46 @@ lib.callback.register("pickle_clubs:getSocietyBalance", function(source, clubId)
         balance = b
         done = true
     end)
-    while not done do
-        Wait(0)
-    end
+    local deadline=GetGameTimer()+5000
+    while not done and GetGameTimer()<deadline do Wait(0) end
+    if not done then return false,"Society API timeout" end
     return balance
 end)
 
-lib.callback.register("pickle_clubs:societyDeposit", function(source, clubId, amount)
-    if not clubId or not Clubs[clubId] then return false, "Club not found" end
-    if not CanManageClub(source, clubId) then return false, "No access" end
-    amount = tonumber(amount)
-    if not amount or amount <= 0 then return false, "Invalid amount" end
-    local club = Clubs[clubId]
-    local societyName = GetPrimaryJobName(club)
-    if not societyName then return false, "No society configured" end
-    local cash = GetMoney(source, "money")
-    if cash < amount then return false, "Not enough cash" end
-    RemoveMoney(source, amount, "money")
-    AddSocietyMoney(societyName, amount)
-    return true
-end)
-
-lib.callback.register("pickle_clubs:societyWithdraw", function(source, clubId, amount)
-    if not clubId or not Clubs[clubId] then return false, "Club not found" end
-    if not CanManageClub(source, clubId) then return false, "No access" end
-    amount = tonumber(amount)
-    if not amount or amount <= 0 then return false, "Invalid amount" end
-    local club = Clubs[clubId]
-    local societyName = GetPrimaryJobName(club)
-    if not societyName then return false, "No society configured" end
-    local done = false
-    local balance = 0
-    GetSocietyBalance(societyName, function(b)
-        balance = b
-        done = true
+local societyLocks={}
+local function transfer(source,clubId,amount,withdraw)
+    if not CanManageClub(source,clubId) or not ClubFinite(amount,1,10000000) or amount%1~=0 then return false,'Invalid transfer' end
+    local name=GetPrimaryJobName(Clubs[clubId])
+    if not name or societyLocks[name] then return false,'Society busy' end
+    societyLocks[name]=true
+    local owner=GetIdentifier(source)
+    local ok,success=pcall(function()
+        if withdraw then
+            local done,balance=false,nil
+            GetSocietyBalance(name,function(n) balance=n; done=true end)
+            local deadline=GetGameTimer()+5000
+            while not done and GetGameTimer()<deadline do Wait(0) end
+            if not done or not ClubFinite(balance,amount,1e15) then return false end
+            done=false
+            local removed=false
+            RemoveSocietyMoney(name,amount,function(result) removed=result==true; done=true end)
+            deadline=GetGameTimer()+5000
+            while not done and GetGameTimer()<deadline do Wait(0) end
+            if not done or not removed then return false end
+            if GetIdentifier(source)~=owner or AddMoney(source,amount,'money')~=true then
+                AddSocietyMoney(name,amount); return false
+            end
+            return true
+        end
+        if RemoveMoney(source,amount,'money')~=true then return false end
+        if AddSocietyMoney(name,amount)~=true then AddMoney(source,amount,'money'); return false end
+        return true
     end)
-    while not done do
-        Wait(0)
-    end
-    if balance < amount then return false, "Not enough in society" end
-    RemoveSocietyMoney(societyName, amount, function()
-        AddMoney(source, amount, "money")
-        done = true
-    end)
-    done = false
-    while not done do
-        Wait(0)
-    end
-    return true
-end)
+    societyLocks[name]=nil
+    return ok and success==true
+end
+lib.callback.register('pickle_clubs:societyDeposit',function(source,id,amount) return transfer(source,id,tonumber(amount),false) end)
+lib.callback.register('pickle_clubs:societyWithdraw',function(source,id,amount) return transfer(source,id,tonumber(amount),true) end)
 
 lib.callback.register("pickle_clubs:checkIsAdmin", function(source)
     return IsPlayerAdmin(source) or PlayerCanManageAnyClub(source)

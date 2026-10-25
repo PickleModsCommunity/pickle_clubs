@@ -179,6 +179,9 @@ end
 
 lib.callback.register("pickle_clubs:payEntry", function(source, id, passType)
     local club = Clubs[id]
+    if not club then return false,"Unknown club" end
+    local current=GetClubPass(source,id)
+    if current=="vip" or current and passType~="vip" then return true end
     local es = club and club.entry_settings
     local price
     if passType == "vip" then
@@ -190,7 +193,7 @@ lib.callback.register("pickle_clubs:payEntry", function(source, id, passType)
     if cash < price then
         return false, "Sorry, you don't have enough money for that."
     end
-    RemoveMoney(source, price, "money")
+    if not ClubFinite(price,0,100000) or (price>0 and RemoveMoney(source,price,"money")~=true) then return false,"Payment failed" end
     -- Deposit to society
     local societyName = GetClubSocietyName(id)
     if societyName and AddSocietyMoney then
@@ -221,9 +224,7 @@ CreateThread(function()
             TriggerClientEvent("pickle_clubs:updateClubEntry", source, id, entityId, GetClubEntry(id, entityId))
         end,
         onUnrender = function(id, entityId, source)
-            if GetClubPass(source, id) then
-                SetClubPass(source, id, false)
-            end
+            -- Rendering changes do not revoke purchased entry.
         end,
         onStop = function(id, entityId)
             UnregisterClubEntry(id, entityId)

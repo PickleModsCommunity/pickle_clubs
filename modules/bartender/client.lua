@@ -1908,7 +1908,7 @@ end)
 
 -- Helper function to throw away drink with physics
 local function ThrowAwayDrink(equippedDrinkRef)
-    if not equippedDrinkRef then return end
+    if not equippedDrinkRef or PlayerEquippedDrink~=equippedDrinkRef then return end
     
     local playerPed = PlayerPedId()
     
@@ -1993,7 +1993,7 @@ RegisterNetEvent("pickle_clubs:useDrinkItem", function(itemName, flavors, alcoho
     
     -- Periodic sync thread to update position
     CreateThread(function()
-        while equippedDrinkRef and DoesEntityExist(playerPed) do
+        while PlayerEquippedDrink==equippedDrinkRef and DoesEntityExist(playerPed) do
             Wait(2000) -- Update every 2 seconds
             if equippedDrinkRef then
                 local currentCoords = GetEntityCoords(playerPed)
@@ -2004,7 +2004,7 @@ RegisterNetEvent("pickle_clubs:useDrinkItem", function(itemName, flavors, alcoho
     
     -- Create marker rendering thread
     equippedDrinkRef.thread = CreateThread(function()
-        while equippedDrinkRef and DoesEntityExist(playerPed) do
+        while PlayerEquippedDrink==equippedDrinkRef and DoesEntityExist(playerPed) do
             if DoesEntityExist(drinkProp) then
                 local propCoords = GetEntityCoords(drinkProp)
                 local forwardVector, rightVector, upVector, position = GetEntityMatrix(drinkProp)
@@ -2033,10 +2033,10 @@ RegisterNetEvent("pickle_clubs:useDrinkItem", function(itemName, flavors, alcoho
     
     -- Start drinking mechanics thread
     DrinkingThread = CreateThread(function()
-        while equippedDrinkRef and DoesEntityExist(playerPed) do
+        while PlayerEquippedDrink==equippedDrinkRef and DoesEntityExist(playerPed) do
             Wait(0)
             
-            if not equippedDrinkRef then break end
+            if PlayerEquippedDrink~=equippedDrinkRef then break end
             
             -- Check if animations have stopped and resume idle if needed
             if not equippedDrinkRef.isDrinking and equippedDrinkRef.progress > 0.0 then

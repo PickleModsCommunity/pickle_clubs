@@ -85,24 +85,30 @@ end
 
 function AddMoney(source, count, currency)
     local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return false end
     local currency = currency or "money"
+    local before=GetMoney(source,currency)
     if (currency == "money") then
         xPlayer.addMoney(count)
     elseif (currency == "dirty") then
         xPlayer.addAccountMoney("black_money", count)
     end
     TriggerClientEvent("pickle_clubs:updateMoney", source, GetMoney(source, currency))
+    return GetMoney(source,currency)==before + count
 end
 
 function RemoveMoney(source, count, currency)
     local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return false end
     local currency = currency or "money"
+    local before=GetMoney(source,currency)
     if (currency == "money") then
         xPlayer.removeMoney(count)
     elseif (currency == "dirty") then
         xPlayer.removeAccountMoney("black_money", count)
     end
     TriggerClientEvent("pickle_clubs:updateMoney", source, GetMoney(source, currency))
+    return GetMoney(source,currency)==before - count
 end
 
 function GetMoney(source, currency)
@@ -200,9 +206,14 @@ function AddAlcohol(source, amount)
 end
 
 function AddSocietyMoney(name, amount)
+    local result=promise.new()
     TriggerEvent('esx_addonaccount:getSharedAccount', "society_"..name, function(account)
+        if not account then result:resolve(false); return end
+        local before=account.money
         account.addMoney(amount)
+        result:resolve(account.money==before+amount)
     end)
+    return Citizen.Await(result)
 end
 
 function GetSocietyBalance(name, cb)
@@ -215,10 +226,10 @@ end
 function RemoveSocietyMoney(name, amount, cb)
     cb = (type(cb) == "function") and cb or function() end
     TriggerEvent('esx_addonaccount:getSharedAccount', "society_"..name, function(account)
-        if account then
-            account.removeMoney(amount)
-        end
-        cb()
+        if not account or account.money<amount then cb(false); return end
+        local before=account.money
+        account.removeMoney(amount)
+        cb(account.money==before-amount)
     end)
 end
 
@@ -293,14 +304,20 @@ CreateThread(function()
 
     Inventory.AddItem = function(source, name, count, metadata) -- Metadata is not required.
         local xPlayer = ESX.GetPlayerFromId(source)
+        if not xPlayer then return false end
+        local before=Inventory.GetItemCount(source,name)
         xPlayer.addInventoryItem(name, count)
         Inventory.UpdateInventory(source)
+        return Inventory.GetItemCount(source,name)==before + count
     end
 
     Inventory.RemoveItem = function(source, name, count)
         local xPlayer = ESX.GetPlayerFromId(source)
+        if not xPlayer then return false end
+        local before=Inventory.GetItemCount(source,name)
         xPlayer.removeInventoryItem(name, count)
         Inventory.UpdateInventory(source)
+        return Inventory.GetItemCount(source,name)==before - count
     end
 
     Inventory.AddWeapon = function(source, name, count, metadata) -- Metadata is not required.

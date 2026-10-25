@@ -629,3 +629,10 @@ if Config.UseTarget and AddTargetGlobalPlayer then
         },
     })
 end
+AddEventHandler('onResourceStop',function(name)
+    if name~=GetCurrentResourceName() then return end
+    BeingEscorted=false
+    local ped=PlayerPedId()
+    DetachEntity(ped,true,true)
+    ClearPedTasks(ped)
+end)
